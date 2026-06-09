@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Zero-touch OpenMANET provisioning and imaging"
 readme = "README.md"
 requires-python = ">=3.9"
-license = {text = "MIT"}
+license = "MIT"
 authors = [
     {name = "EasyMANET Contributors"}
 ]
@@ -17,7 +17,6 @@ classifiers = [
     "Development Status :: 3 - Alpha",
     "Environment :: Console",
     "Intended Audience :: System Administrators",
-    "License :: OSI Approved :: MIT License",
     "Operating System :: MacOS",
     "Operating System :: POSIX :: Linux",
     "Programming Language :: Python :: 3",
@@ -42,28 +41,18 @@ dev = [
 
 [project.scripts]
 easymanet = "easymanet_cli.app:main"
-easymanet-desktop = "easymanet_desktop.server:main"
-easymanet-publish = "easymanet_publish.cli:app"
 
 [tool.setuptools.packages.find]
 where = [
     "packages/core/src",
     "packages/image/src",
     "apps/cli/src",
-    "apps/desktop/src",
-    "tools/publish/src",
 ]
 include = [
     "easymanet*",
     "easymanet_cli*",
     "easymanet_image*",
-    "easymanet_desktop*",
-    "easymanet_publish*",
 ]
-
-[tool.setuptools.package-data]
-"easymanet_desktop" = ["static/*"]
-"easymanet_publish" = ["templates/*/.github/workflows/*.yml"]
 
 [tool.setuptools.data-files]
 "share/easymanet/images/openmanet/provisioning" = [
@@ -101,7 +90,5 @@ pythonpath = [
     "packages/core/src",
     "packages/image/src",
     "apps/cli/src",
-    "apps/desktop/src",
-    "tools/publish/src",
     ".",
 ]
