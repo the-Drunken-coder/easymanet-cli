@@ -2,6 +2,7 @@
 
 import json
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -169,6 +170,18 @@ def _point_provision_json() -> dict:
     return data
 
 
+def _copy_api_overlay(prefix: Path) -> None:
+    for relative in (
+        "www/easymanet-api/v1/identity",
+        "www/easymanet-api/v1/neighbors",
+        "www/easymanet-api/v1/topology",
+    ):
+        source = OVERLAY / relative
+        target = prefix / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
+
+
 def _write_dropbear_stub(prefix: Path) -> None:
     init_dir = prefix / "etc" / "init.d"
     init_dir.mkdir(parents=True, exist_ok=True)
@@ -183,6 +196,24 @@ case "$1" in
   start) echo started >> "$state_file" ;;
   disable) echo disabled >> "$state_file" ;;
   stop) echo stopped >> "$state_file" ;;
+esac
+"""
+    )
+    stub.chmod(0o755)
+
+
+def _write_uhttpd_stub(prefix: Path) -> None:
+    init_dir = prefix / "etc" / "init.d"
+    init_dir.mkdir(parents=True, exist_ok=True)
+    state_file = prefix / "var" / "uhttpd-state"
+    stub = init_dir / "uhttpd"
+    stub.write_text(
+        f"""#!/bin/sh
+state_file="{state_file}"
+case "$1" in
+  enable) echo enabled >> "$state_file" ;;
+  restart) echo restarted >> "$state_file" ;;
+  start) echo started >> "$state_file" ;;
 esac
 """
     )
@@ -263,9 +294,9 @@ def test_provision_gate_node_smoke(tmp_path):
     assert _uci_get(uci_state, "wireless.mesh0.mesh_id", env) == "test-mesh"
     assert _uci_get(uci_state, "network.bat0.gw_mode", env) == "server"
     assert _uci_get(uci_state, "network.meship.ipaddr", env) == "10.41.1.1"
-    assert _uci_get(uci_state, "network.wan.proto", env) == "dhcp"
-    assert _uci_get(uci_state, "network.wan.device", env) == "br-lan"
-    assert _uci_get(uci_state, "network.wan.ifname", env) == "br-lan"
+    assert _uci_get(uci_state, "network.wan.proto", env) == ""
+    assert _uci_get(uci_state, "network.wan.device", env) == ""
+    assert _uci_get(uci_state, "network.wan.ifname", env) == ""
     assert _uci_get(uci_state, "mesh11sd.mesh_params.mesh_gate_announcements", env) == "1"
 
     dropbear_state = (prefix / "var" / "dropbear-state").read_text()
@@ -292,6 +323,102 @@ def test_provision_point_node_disables_ssh(tmp_path):
 
     dropbear_state = (prefix / "var" / "dropbear-state").read_text()
     assert "disabled" in dropbear_state
+
+
+def test_provision_gate_exposes_topology_api_on_lan_and_mesh(tmp_path):
+    prefix = tmp_path / "root"
+    uci_state = tmp_path / "uci-state"
+    _seed_wireless_radios(uci_state)
+    _copy_api_overlay(prefix)
+    _write_uhttpd_stub(prefix)
+
+    result = _run_provision(prefix, _gate_provision_json(), uci_state)
+    assert result.returncode == 0, result.stderr + result.stdout
+
+    env = _harness_env(uci_state)
+    assert _uci_get(uci_state, "uhttpd.easymanet_api.home", env).endswith(
+        "/www/easymanet-api"
+    )
+    assert _uci_get(uci_state, "uhttpd.easymanet_api.cgi_prefix", env) == "/v1"
+    assert (
+        _uci_get(uci_state, "uhttpd.easymanet_api.listen_http", env)
+        == "0.0.0.0:10411"
+    )
+    assert _uci_get(uci_state, "firewall.allow_easymanet_api_wan.src", env) == "wan"
+    assert (
+        _uci_get(uci_state, "firewall.allow_easymanet_api_wan.dest_port", env)
+        == "10411"
+    )
+    assert "restarted" in (prefix / "var" / "uhttpd-state").read_text()
+
+
+def test_provision_point_exposes_topology_api_only_on_mesh_ip(tmp_path):
+    prefix = tmp_path / "root"
+    uci_state = tmp_path / "uci-state"
+    _seed_wireless_radios(uci_state)
+    _copy_api_overlay(prefix)
+    _write_uhttpd_stub(prefix)
+
+    result = _run_provision(prefix, _point_provision_json(), uci_state)
+    assert result.returncode == 0, result.stderr + result.stdout
+
+    env = _harness_env(uci_state)
+    assert (
+        _uci_get(uci_state, "uhttpd.easymanet_api.listen_http", env)
+        == "10.41.2.1:10411"
+    )
+    assert _uci_get(uci_state, "firewall.allow_easymanet_api_wan.src", env) == ""
+
+
+def test_topology_api_parses_batctl_neighbors_fixture():
+    fixture = """
+[B.A.T.M.A.N. adv 2023.1, MainIF/MAC: wlan0/c0:bf:be:ef:00:01 (bat0/aa:bb:cc:dd:ee:ff BATMAN_V)]
+IF             Neighbor              last-seen
+wlan0          bc:2a:33:96:af:68     0.430s (7.1)
+"""
+
+    result = subprocess.run(
+        ["sh", str(OVERLAY / "usr" / "lib" / "easymanet" / "api.sh")],
+        input=fixture,
+        env={
+            **os.environ,
+            "EASYMANET_API_TEST_MODE": "parse-neighbors",
+            "EASYMANET_LIB_DIR": str(OVERLAY / "usr" / "lib" / "easymanet"),
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "wlan0\tbc:2a:33:96:af:68\t0.430s\t7.1"
+
+
+def test_topology_api_parses_batctl_originators_fixture():
+    fixture = """
+[B.A.T.M.A.N. adv 2023.1, MainIF/MAC: wlan0/c0:bf:be:ef:00:01 (bat0/aa:bb:cc:dd:ee:ff BATMAN_V)]
+  Originator        last-seen (#/255) Nexthop           [outgoingIF]
+  bc:2a:33:96:af:68   0.430s   (255) bc:2a:33:96:af:68 [wlan0]
+"""
+
+    result = subprocess.run(
+        ["sh", str(OVERLAY / "usr" / "lib" / "easymanet" / "api.sh")],
+        input=fixture,
+        env={
+            **os.environ,
+            "EASYMANET_API_TEST_MODE": "parse-originators",
+            "EASYMANET_LIB_DIR": str(OVERLAY / "usr" / "lib" / "easymanet"),
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert (
+        result.stdout.strip()
+        == "bc:2a:33:96:af:68\t0.430s\tbc:2a:33:96:af:68\twlan0"
+    )
 
 
 def test_provision_writes_valid_root_password_hash(tmp_path):
@@ -329,17 +456,15 @@ def test_provision_reapplies_mesh_channel_after_network_restart(tmp_path):
     prefix = tmp_path / "root"
     uci_state = tmp_path / "uci-state"
     _seed_wireless_radios(uci_state)
-    _write_network_channel_rewrite_stub(prefix, 42)
+    _write_network_channel_rewrite_stub(prefix, 36)
     provision_data = _point_provision_json()
-    provision_data["mesh"]["channel"] = 41
-    provision_data["mesh"]["bandwidth_mhz"] = 1
 
     result = _run_provision(prefix, provision_data, uci_state)
     assert result.returncode == 0, result.stderr + result.stdout
 
     env = _harness_env(uci_state)
-    assert _uci_get(uci_state, "wireless.radio2.channel", env) == "41"
-    assert _uci_get(uci_state, "wireless.radio2.s1g_chanbw", env) == "1"
+    assert _uci_get(uci_state, "wireless.radio2.channel", env) == "42"
+    assert _uci_get(uci_state, "wireless.radio2.s1g_chanbw", env) == "2"
 
 
 def test_provision_sets_openmanetd_mesh_interface_to_bat0(tmp_path):
@@ -392,10 +517,11 @@ easymanet_repair_management_lan late-boot
     assert result.returncode == 0, result.stderr + result.stdout
     assert _uci_get(uci_state, "network.lan.device", env) == "br-lan"
     assert _uci_get(uci_state, "network.lan.ipaddr", env) == "10.41.254.1"
+    assert _uci_get(uci_state, "network.wan.device", env) == "phy1-sta0"
     assert "network.@device[0].ports='eth0'" in uci_state.read_text()
 
 
-def test_late_management_lan_repair_preserves_shared_brlan_wan(tmp_path):
+def test_late_management_lan_repair_removes_stale_brlan_wan(tmp_path):
     provision_json = tmp_path / "provision.json"
     provision_json.write_text(json.dumps(_gate_provision_json(), indent=2))
     uci_state = tmp_path / "uci-state"
@@ -430,9 +556,28 @@ easymanet_repair_management_lan late-boot
         env,
     )
     assert result.returncode == 0, result.stderr + result.stdout
-    assert _uci_get(uci_state, "network.wan.device", env) == "br-lan"
-    assert _uci_get(uci_state, "network.wan.ifname", env) == "br-lan"
+    assert _uci_get(uci_state, "network.wan.device", env) == ""
+    assert _uci_get(uci_state, "network.wan.ifname", env) == ""
     assert "network.@device[0].ports='eth0'" in uci_state.read_text()
+
+
+def test_provision_non_eth0_uplink_configures_wan(tmp_path):
+    prefix = tmp_path / "root"
+    uci_state = tmp_path / "uci-state"
+    _seed_wireless_radios(uci_state)
+    provision_data = _gate_provision_json()
+    provision_data["node"]["gateway"] = {
+        "enabled": True,
+        "uplink_interface": "usb0",
+    }
+
+    result = _run_provision(prefix, provision_data, uci_state)
+    assert result.returncode == 0, result.stderr + result.stdout
+
+    env = _harness_env(uci_state)
+    assert _uci_get(uci_state, "network.wan.proto", env) == "dhcp"
+    assert _uci_get(uci_state, "network.wan.device", env) == "usb0"
+    assert _uci_get(uci_state, "network.wan.ifname", env) == "usb0"
 
 
 def test_provision_wifi_uplink_keeps_wan_on_wifi_sta_path(tmp_path):
@@ -488,7 +633,73 @@ def test_provision_requires_node_ip(tmp_path):
     result = _run_provision(prefix, provision_data, uci_state)
 
     assert result.returncode != 0
-    assert "missing required mesh/node fields" in result.stdout
+    assert "missing required provision.json fields: node.ip" in result.stdout
+
+
+@pytest.mark.parametrize(
+    ("field_path", "expected"),
+    [
+        (("version",), "version"),
+        (("mesh", "id"), "mesh.id"),
+        (("mesh", "password"), "mesh.password"),
+        (("mesh", "channel"), "mesh.channel"),
+        (("mesh", "bandwidth_mhz"), "mesh.bandwidth_mhz"),
+        (("mesh", "country"), "mesh.country"),
+        (("node", "hostname"), "node.hostname"),
+        (("node", "role"), "node.role"),
+        (("node", "ip"), "node.ip"),
+    ],
+)
+def test_provision_reports_missing_required_fields(tmp_path, field_path, expected):
+    prefix = tmp_path / "root"
+    uci_state = tmp_path / "uci-state"
+    _seed_wireless_radios(uci_state)
+    provision_data = _gate_provision_json()
+    _delete_nested(provision_data, field_path)
+
+    result = _run_provision(prefix, provision_data, uci_state)
+
+    assert result.returncode != 0
+    assert "missing required provision.json fields:" in result.stdout
+    assert expected in result.stdout
+
+
+@pytest.mark.parametrize(
+    ("field_path", "value", "expected"),
+    [
+        (("version",), 2, "unsupported provision.json version"),
+        (("node", "role"), "relay", "unsupported node.role"),
+        (("mesh", "bandwidth_mhz"), 3, "unsupported mesh.bandwidth_mhz"),
+        (("mesh", "bandwidth_mhz"), 4, "rpi4-mm6108-spi in US requires"),
+        (("mesh", "channel"), 36, "rpi4-mm6108-spi in US requires"),
+        (("mesh", "channel"), "abc", "mesh.channel must be numeric"),
+    ],
+)
+def test_provision_rejects_invalid_required_values(tmp_path, field_path, value, expected):
+    prefix = tmp_path / "root"
+    uci_state = tmp_path / "uci-state"
+    _seed_wireless_radios(uci_state)
+    provision_data = _gate_provision_json()
+    _set_nested(provision_data, field_path, value)
+
+    result = _run_provision(prefix, provision_data, uci_state)
+
+    assert result.returncode != 0
+    assert expected in result.stdout
+
+
+def _delete_nested(data: dict, field_path: tuple[str, ...]) -> None:
+    current = data
+    for part in field_path[:-1]:
+        current = current[part]
+    del current[field_path[-1]]
+
+
+def _set_nested(data: dict, field_path: tuple[str, ...], value: object) -> None:
+    current = data
+    for part in field_path[:-1]:
+        current = current[part]
+    current[field_path[-1]] = value
 
 
 def test_em_mesh_encryption_override_propagates_to_uci(tmp_path):

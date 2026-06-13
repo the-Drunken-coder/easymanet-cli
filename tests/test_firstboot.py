@@ -87,8 +87,8 @@ def test_firstboot_temp_boot_mount_is_writable_for_payload_removal():
 
 def test_firstboot_requires_node_ip():
     text = PROVISION_SCRIPT.read_text()
-    required_block = text.split('if [ -z "$MESH_ID" ]', 1)[1].split("fi", 1)[0]
-    assert '[ -z "$NODE_IP" ]' in required_block
+    required_block = text.split('missing_fields=""', 1)[1].split('if [ -n "$missing_fields" ]', 1)[0]
+    assert '[ -n "$NODE_IP" ] || missing_fields="$missing_fields node.ip"' in required_block
 
 
 def test_firstboot_does_not_auto_reboot_after_provisioning():
@@ -145,3 +145,18 @@ def test_boot_report_hook_is_packaged_and_enabled():
     assert 'cp /etc/config/mesh11sd "$latest/config-mesh11sd"' not in report_text
     assert "/etc/init.d/easymanet-boot-report enable" in defaults.read_text()
     assert "write_easymanet_boot_report provisioned" in PROVISION_SCRIPT.read_text()
+
+
+def test_topology_api_overlay_is_packaged():
+    api = OVERLAY / "usr" / "lib" / "easymanet" / "api.sh"
+    identity = OVERLAY / "www" / "easymanet-api" / "v1" / "identity"
+    neighbors = OVERLAY / "www" / "easymanet-api" / "v1" / "neighbors"
+    topology = OVERLAY / "www" / "easymanet-api" / "v1" / "topology"
+    provision_text = PROVISION_SCRIPT.read_text()
+
+    for path in (api, identity, neighbors, topology):
+        assert path.exists()
+        assert path.stat().st_mode & 0o111
+    assert "configure_easymanet_api" in provision_text
+    assert "uhttpd.easymanet_api" in provision_text
+    assert "allow_easymanet_api_wan" in provision_text

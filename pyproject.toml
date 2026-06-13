@@ -4,10 +4,10 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "easymanet"
-version = "0.2.0"
-description = "Zero-touch OpenMANET provisioning and imaging"
+version = "0.2.1"
+description = "Public CLI and automation surface for EasyMANET."
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 license = "MIT"
 authors = [
     {name = "EasyMANET Contributors"}
@@ -20,14 +20,14 @@ classifiers = [
     "Operating System :: MacOS",
     "Operating System :: POSIX :: Linux",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
     "Topic :: System :: Installation/Setup",
     "Topic :: System :: Systems Administration",
 ]
 dependencies = [
     "typer>=0.9",
     "pyyaml>=6",
-    "rich>=13",
 ]
 
 [project.optional-dependencies]
@@ -77,10 +77,16 @@ include = [
     "images/openmanet/provisioning/openwrt-overlay/etc/uci-defaults/99-easymanet",
 ]
 "share/easymanet/images/openmanet/provisioning/openwrt-overlay/usr/lib/easymanet" = [
+    "images/openmanet/provisioning/openwrt-overlay/usr/lib/easymanet/api.sh",
     "images/openmanet/provisioning/openwrt-overlay/usr/lib/easymanet/boot-report.sh",
     "images/openmanet/provisioning/openwrt-overlay/usr/lib/easymanet/network.sh",
     "images/openmanet/provisioning/openwrt-overlay/usr/lib/easymanet/provision-lib.sh",
     "images/openmanet/provisioning/openwrt-overlay/usr/lib/easymanet/provision.sh",
+]
+"share/easymanet/images/openmanet/provisioning/openwrt-overlay/www/easymanet-api/v1" = [
+    "images/openmanet/provisioning/openwrt-overlay/www/easymanet-api/v1/identity",
+    "images/openmanet/provisioning/openwrt-overlay/www/easymanet-api/v1/neighbors",
+    "images/openmanet/provisioning/openwrt-overlay/www/easymanet-api/v1/topology",
 ]
 
 [tool.pytest.ini_options]
